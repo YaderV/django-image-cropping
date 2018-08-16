@@ -1,0 +1,575 @@
+From 7de8945eaae7ba6d1d1a4bf3a1fef2ed919be985 Mon Sep 17 00:00:00 2001
+From: emacsway <ivzak@yandex.ru>
+Date: Thu, 17 May 2018 04:02:45 +0300
+Subject: [PATCH 01/11] Support Django-2.0
+
+---
+ image_cropping/admin.py         | 5 +++--
+ image_cropping/backends/base.py | 2 +-
+ image_cropping/fields.py        | 4 ++--
+ image_cropping/widgets.py       | 4 ++--
+ 4 files changed, 8 insertions(+), 7 deletions(-)
+
+diff --git a/image_cropping/admin.py b/image_cropping/admin.py
+index 9b4eaca..4608f03 100644
+--- a/image_cropping/admin.py
++++ b/image_cropping/admin.py
+@@ -1,10 +1,11 @@
+-from __future__ import unicode_literals
++import typing
++from django.contrib.admin.options import BaseModelAdmin
+ 
+ from .utils import get_backend
+ 
+ 
+ class ImageCroppingMixin(object):
+-    def formfield_for_dbfield(self, db_field, **kwargs):
++    def formfield_for_dbfield(self: typing.Union['ImageCroppingMixin', BaseModelAdmin], db_field, **kwargs):
+         crop_fields = getattr(self.model, 'crop_fields', {})
+         if db_field.name in crop_fields:
+             target = crop_fields[db_field.name]
+diff --git a/image_cropping/backends/base.py b/image_cropping/backends/base.py
+index eb4418e..b033181 100644
+--- a/image_cropping/backends/base.py
++++ b/image_cropping/backends/base.py
+@@ -40,7 +40,7 @@ def get_widget(self, db_field, target, admin_site):
+         if target['fk_field']:
+             # it's a ForeignKey
+             return self.WIDGETS['foreign_key'](
+-                db_field.rel,
++                db_field.remote_field,
+                 field_name=target['fk_field'],
+                 admin_site=admin_site,
+             )
+diff --git a/image_cropping/fields.py b/image_cropping/fields.py
+index 741432c..cc2a5e1 100644
+--- a/image_cropping/fields.py
++++ b/image_cropping/fields.py
+@@ -74,8 +74,8 @@ def deconstruct(self):  # pragma: no cover
+         }
+         return self.name, 'image_cropping.fields.ImageRatioField', args, kwargs
+ 
+-    def contribute_to_class(self, cls, name):
+-        super(ImageRatioField, self).contribute_to_class(cls, name)
++    def contribute_to_class(self, cls, name, private_only=False):
++        super(ImageRatioField, self).contribute_to_class(cls, name, private_only)
+         if not cls._meta.abstract:
+             # attach a list of fields that are referenced by the ImageRatioField
+             # so we can set the correct widget in the ModelAdmin
+diff --git a/image_cropping/widgets.py b/image_cropping/widgets.py
+index 76eb2a5..cb97a82 100644
+--- a/image_cropping/widgets.py
++++ b/image_cropping/widgets.py
+@@ -118,8 +118,8 @@ def render(self, name, value, attrs=None):
+             attrs = {}
+ 
+         if value:
+-            app_name = self.rel.to._meta.app_label
+-            model_name = self.rel.to._meta.object_name.lower()
++            app_name = self.rel.model._meta.app_label
++            model_name = self.rel.model._meta.object_name.lower()
+             try:
+                 image = getattr(
+                     get_model(app_name, model_name).objects.get(pk=value),
+
+From f54d050a3a4e4b5049f2da0caf68fbace6a8d396 Mon Sep 17 00:00:00 2001
+From: emacsway <ivzak@yandex.ru>
+Date: Thu, 17 May 2018 04:17:56 +0300
+Subject: [PATCH 02/11] Compatibility with older Django versions and Python-2
+
+---
+ image_cropping/admin.py         |  6 ++----
+ image_cropping/backends/base.py |  4 ++--
+ image_cropping/widgets.py       | 10 +++++++---
+ 3 files changed, 11 insertions(+), 9 deletions(-)
+
+diff --git a/image_cropping/admin.py b/image_cropping/admin.py
+index 4608f03..d727cdf 100644
+--- a/image_cropping/admin.py
++++ b/image_cropping/admin.py
+@@ -1,11 +1,9 @@
+-import typing
+-from django.contrib.admin.options import BaseModelAdmin
+-
++from __future__ import unicode_literals
+ from .utils import get_backend
+ 
+ 
+ class ImageCroppingMixin(object):
+-    def formfield_for_dbfield(self: typing.Union['ImageCroppingMixin', BaseModelAdmin], db_field, **kwargs):
++    def formfield_for_dbfield(self, db_field, **kwargs):
+         crop_fields = getattr(self.model, 'crop_fields', {})
+         if db_field.name in crop_fields:
+             target = crop_fields[db_field.name]
+diff --git a/image_cropping/backends/base.py b/image_cropping/backends/base.py
+index b033181..084f05b 100644
+--- a/image_cropping/backends/base.py
++++ b/image_cropping/backends/base.py
+@@ -1,7 +1,7 @@
+ import abc
+ 
+ import six
+-
++from django import VERSION as DJANGO_VERSION
+ from django.utils.translation import ugettext as _
+ 
+ from .. import widgets
+@@ -40,7 +40,7 @@ def get_widget(self, db_field, target, admin_site):
+         if target['fk_field']:
+             # it's a ForeignKey
+             return self.WIDGETS['foreign_key'](
+-                db_field.remote_field,
++                db_field.rel if DJANGO_VERSION < (2,) else db_field.remote_field,
+                 field_name=target['fk_field'],
+                 admin_site=admin_site,
+             )
+diff --git a/image_cropping/widgets.py b/image_cropping/widgets.py
+index cb97a82..03f9f0d 100644
+--- a/image_cropping/widgets.py
++++ b/image_cropping/widgets.py
+@@ -2,7 +2,7 @@
+ 
+ import logging
+ 
+-from django import forms
++from django import forms, VERSION as DJANGO_VERSION
+ from django.contrib.admin.templatetags import admin_static
+ from django.contrib.admin.widgets import AdminFileWidget, ForeignKeyRawIdWidget
+ from django.db.models import ObjectDoesNotExist
+@@ -118,8 +118,12 @@ def render(self, name, value, attrs=None):
+             attrs = {}
+ 
+         if value:
+-            app_name = self.rel.model._meta.app_label
+-            model_name = self.rel.model._meta.object_name.lower()
++            if DJANGO_VERSION < (2,):
++                rel_to = self.rel.to
++            else:
++                rel_to = self.rel.model
++            app_name = rel_to._meta.app_label
++            model_name = rel_to._meta.object_name.lower()
+             try:
+                 image = getattr(
+                     get_model(app_name, model_name).objects.get(pk=value),
+
+From adebe73eca5375074d31ec73d18d4267ba66aca0 Mon Sep 17 00:00:00 2001
+From: emacsway <ivzak@yandex.ru>
+Date: Thu, 17 May 2018 04:18:27 +0300
+Subject: [PATCH 03/11] Added Django-2.0 to tox.ini
+
+---
+ tox.ini | 5 +++++
+ 1 file changed, 5 insertions(+)
+
+diff --git a/tox.ini b/tox.ini
+index 84a9886..2441cbe 100644
+--- a/tox.ini
++++ b/tox.ini
+@@ -30,3 +30,8 @@ deps =
+ deps =
+     Django<2.0
+     {[base]deps}
++
++[testenv:django20]
++deps =
++    Django==2.0
++    {[base]deps}
+
+From 71d704b40b1705243019e6393f6dd5ab7aea1300 Mon Sep 17 00:00:00 2001
+From: emacsway <ivzak@yandex.ru>
+Date: Thu, 17 May 2018 04:31:42 +0300
+Subject: [PATCH 04/11] Added Django-2.0 to tox.ini and .travis.yml
+
+---
+ .travis.yml | 5 +++++
+ tox.ini     | 2 +-
+ 2 files changed, 6 insertions(+), 1 deletion(-)
+
+diff --git a/.travis.yml b/.travis.yml
+index d2c01eb..e02a3d7 100644
+--- a/.travis.yml
++++ b/.travis.yml
+@@ -12,6 +12,11 @@ env:
+   - TOXENV=django18
+   - TOXENV=django110
+   - TOXENV=django111
++  - TOXENV=django20
++matrix:
++  exclude:
++    - python: 2.7
++      env: TOXENV=django20
+ notifications:
+   email: false
+ sudo: false
+diff --git a/tox.ini b/tox.ini
+index 2441cbe..9b822d9 100644
+--- a/tox.ini
++++ b/tox.ini
+@@ -3,7 +3,7 @@
+ # Then call "tox" from this directory to run the test suite for all configurations.
+ 
+ [tox]
+-envlist = django18, django110, django111
++envlist = django18, django110, django111, django20
+ 
+ [base]
+ deps =
+
+From f301d52570609081bb3f92ba3beffe371df68add Mon Sep 17 00:00:00 2001
+From: emacsway <ivzak@yandex.ru>
+Date: Thu, 17 May 2018 04:42:02 +0300
+Subject: [PATCH 05/11] Minor fix for Django-2.0
+
+---
+ example/models.py | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/example/models.py b/example/models.py
+index 6446b29..60a6d75 100644
+--- a/example/models.py
++++ b/example/models.py
+@@ -18,7 +18,7 @@ def get_cropping_as_list(self):
+ 
+ 
+ class ImageFK(models.Model):
+-    image = models.ForeignKey(Image)
++    image = models.ForeignKey(Image, on_delete=models.CASCADE)
+     cropping = ImageRatioField('image__image_field', '120x100')
+ 
+     class Meta:
+
+From 69764efdf2204b83d732a20e0b0f04aab172ee35 Mon Sep 17 00:00:00 2001
+From: emacsway <ivzak@yandex.ru>
+Date: Thu, 17 May 2018 04:54:30 +0300
+Subject: [PATCH 06/11] Fix import reverse() for Django-2.0
+
+---
+ example/tests/test_settings.py | 5 ++++-
+ 1 file changed, 4 insertions(+), 1 deletion(-)
+
+diff --git a/example/tests/test_settings.py b/example/tests/test_settings.py
+index 074b527..5bd5d15 100644
+--- a/example/tests/test_settings.py
++++ b/example/tests/test_settings.py
+@@ -1,6 +1,9 @@
+ from django_webtest import WebTest
+ 
+-from django.core.urlresolvers import reverse
++try:
++    from django.urls import reverse
++except ImportError:
++    from django.core.urlresolvers import reverse
+ from django.test.utils import override_settings
+ 
+ from . import factory
+
+From 4e4a2dd86ee98eaa33b3d7a23e9a6864ff107672 Mon Sep 17 00:00:00 2001
+From: emacsway <ivzak@yandex.ru>
+Date: Thu, 17 May 2018 05:04:33 +0300
+Subject: [PATCH 07/11] Fix import reverse() for Django-2.0
+
+---
+ example/tests/test_settings.py | 2 +-
+ example/views.py               | 6 +++++-
+ 2 files changed, 6 insertions(+), 2 deletions(-)
+
+diff --git a/example/tests/test_settings.py b/example/tests/test_settings.py
+index 5bd5d15..29d5a7e 100644
+--- a/example/tests/test_settings.py
++++ b/example/tests/test_settings.py
+@@ -1,10 +1,10 @@
+ from django_webtest import WebTest
++from django.test.utils import override_settings
+ 
+ try:
+     from django.urls import reverse
+ except ImportError:
+     from django.core.urlresolvers import reverse
+-from django.test.utils import override_settings
+ 
+ from . import factory
+ 
+diff --git a/example/views.py b/example/views.py
+index dc16d26..41aa7b5 100644
+--- a/example/views.py
++++ b/example/views.py
+@@ -1,7 +1,11 @@
+-from django.core.urlresolvers import reverse
+ from django.http import HttpResponseRedirect
+ from django.shortcuts import get_object_or_404, render
+ 
++try:
++    from django.urls import reverse
++except ImportError:
++    from django.core.urlresolvers import reverse
++
+ from image_cropping.utils import get_backend
+ 
+ from .forms import ImageForm
+
+From 01f0ac9c971cabb4aa03c0f03e1d29f32ab58fe7 Mon Sep 17 00:00:00 2001
+From: emacsway <ivzak@yandex.ru>
+Date: Thu, 17 May 2018 06:05:50 +0300
+Subject: [PATCH 08/11] Django-2.0 tests passed
+
+---
+ example/requirements.txt        |  6 +++---
+ example/settings.py             | 12 +++++++++++-
+ example/urls.py                 |  2 +-
+ image_cropping/backends/base.py |  4 ++--
+ image_cropping/widgets.py       |  5 +++--
+ 5 files changed, 20 insertions(+), 9 deletions(-)
+
+diff --git a/example/requirements.txt b/example/requirements.txt
+index efb3da4..091e322 100644
+--- a/example/requirements.txt
++++ b/example/requirements.txt
+@@ -1,6 +1,6 @@
+-easy_thumbnails==2.4.1
+-WebTest==2.0.27
+-django-webtest==1.9.2
++easy_thumbnails==2.5
++WebTest==2.0.29
++django-webtest==1.9.3
+ coverage==4.4.1
+ 
+ isort==4.2.15
+diff --git a/example/settings.py b/example/settings.py
+index 4a1d79d..43dea27 100644
+--- a/example/settings.py
++++ b/example/settings.py
+@@ -48,7 +48,17 @@
+     },
+ ]
+ 
+-if django.VERSION[:2] >= (1, 7):
++if django.VERSION[:2] >= (2, 0):
++    MIDDLEWARE = (
++        'django.contrib.sessions.middleware.SessionMiddleware',
++        'django.middleware.common.CommonMiddleware',
++        'django.middleware.csrf.CsrfViewMiddleware',
++        'django.contrib.auth.middleware.AuthenticationMiddleware',
++        'django.contrib.messages.middleware.MessageMiddleware',
++        'django.middleware.clickjacking.XFrameOptionsMiddleware',
++    )
++
++elif django.VERSION[:2] >= (1, 7):
+     MIDDLEWARE_CLASSES = (
+         'django.contrib.sessions.middleware.SessionMiddleware',
+         'django.middleware.common.CommonMiddleware',
+diff --git a/example/urls.py b/example/urls.py
+index 944f3b4..e1a5588 100644
+--- a/example/urls.py
++++ b/example/urls.py
+@@ -22,7 +22,7 @@
+     url(r'^show_thumbnail/(?P<image_id>\d+)/$',
+         views.show_thumbnail,
+         name='show_thumbnail'),
+-    url(r'^admin/', include(admin.site.urls)),
++    url(r'^admin/', admin.site.urls),
+ ]
+ 
+ urlpatterns += static.static(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT)
+diff --git a/image_cropping/backends/base.py b/image_cropping/backends/base.py
+index 084f05b..c22f83c 100644
+--- a/image_cropping/backends/base.py
++++ b/image_cropping/backends/base.py
+@@ -1,7 +1,7 @@
+ import abc
+ 
+ import six
+-from django import VERSION as DJANGO_VERSION
++import django
+ from django.utils.translation import ugettext as _
+ 
+ from .. import widgets
+@@ -40,7 +40,7 @@ def get_widget(self, db_field, target, admin_site):
+         if target['fk_field']:
+             # it's a ForeignKey
+             return self.WIDGETS['foreign_key'](
+-                db_field.rel if DJANGO_VERSION < (2,) else db_field.remote_field,
++                db_field.rel if django.VERSION < (2,) else db_field.remote_field,
+                 field_name=target['fk_field'],
+                 admin_site=admin_site,
+             )
+diff --git a/image_cropping/widgets.py b/image_cropping/widgets.py
+index 03f9f0d..26929de 100644
+--- a/image_cropping/widgets.py
++++ b/image_cropping/widgets.py
+@@ -2,7 +2,8 @@
+ 
+ import logging
+ 
+-from django import forms, VERSION as DJANGO_VERSION
++import django
++from django import forms
+ from django.contrib.admin.templatetags import admin_static
+ from django.contrib.admin.widgets import AdminFileWidget, ForeignKeyRawIdWidget
+ from django.db.models import ObjectDoesNotExist
+@@ -118,7 +119,7 @@ def render(self, name, value, attrs=None):
+             attrs = {}
+ 
+         if value:
+-            if DJANGO_VERSION < (2,):
++            if django.VERSION < (2,):
+                 rel_to = self.rel.to
+             else:
+                 rel_to = self.rel.model
+
+From f633c6d81948c893921700ab8fba06f2b94fcb80 Mon Sep 17 00:00:00 2001
+From: emacsway <ivzak@yandex.ru>
+Date: Thu, 17 May 2018 06:19:47 +0300
+Subject: [PATCH 09/11] Minor improvements of version checking
+
+---
+ image_cropping/backends/base.py | 2 +-
+ image_cropping/widgets.py       | 6 +++---
+ 2 files changed, 4 insertions(+), 4 deletions(-)
+
+diff --git a/image_cropping/backends/base.py b/image_cropping/backends/base.py
+index c22f83c..bbbb49e 100644
+--- a/image_cropping/backends/base.py
++++ b/image_cropping/backends/base.py
+@@ -40,7 +40,7 @@ def get_widget(self, db_field, target, admin_site):
+         if target['fk_field']:
+             # it's a ForeignKey
+             return self.WIDGETS['foreign_key'](
+-                db_field.rel if django.VERSION < (2,) else db_field.remote_field,
++                db_field.remote_field if django.VERSION[:2] >= (2, 0) else db_field.rel,
+                 field_name=target['fk_field'],
+                 admin_site=admin_site,
+             )
+diff --git a/image_cropping/widgets.py b/image_cropping/widgets.py
+index 26929de..f074328 100644
+--- a/image_cropping/widgets.py
++++ b/image_cropping/widgets.py
+@@ -119,10 +119,10 @@ def render(self, name, value, attrs=None):
+             attrs = {}
+ 
+         if value:
+-            if django.VERSION < (2,):
+-                rel_to = self.rel.to
+-            else:
++            if django.VERSION[:2] >= (2, 0):
+                 rel_to = self.rel.model
++            else:
++                rel_to = self.rel.to
+             app_name = rel_to._meta.app_label
+             model_name = rel_to._meta.object_name.lower()
+             try:
+
+From d590cb8a050c0a32f5663b4a3549776ce8f995c1 Mon Sep 17 00:00:00 2001
+From: emacsway <ivzak@yandex.ru>
+Date: Thu, 17 May 2018 06:20:51 +0300
+Subject: [PATCH 10/11] fixed tox deps
+
+---
+ example/requirements.txt | 6 +++---
+ tox.ini                  | 3 +++
+ 2 files changed, 6 insertions(+), 3 deletions(-)
+
+diff --git a/example/requirements.txt b/example/requirements.txt
+index 091e322..efb3da4 100644
+--- a/example/requirements.txt
++++ b/example/requirements.txt
+@@ -1,6 +1,6 @@
+-easy_thumbnails==2.5
+-WebTest==2.0.29
+-django-webtest==1.9.3
++easy_thumbnails==2.4.1
++WebTest==2.0.27
++django-webtest==1.9.2
+ coverage==4.4.1
+ 
+ isort==4.2.15
+diff --git a/tox.ini b/tox.ini
+index 9b822d9..a29cd2a 100644
+--- a/tox.ini
++++ b/tox.ini
+@@ -34,4 +34,7 @@ deps =
+ [testenv:django20]
+ deps =
+     Django==2.0
++    easy_thumbnails==2.5
++    WebTest==2.0.29
++    django-webtest==1.9.3
+     {[base]deps}
+
+From 4ef4a3ef442544c9d31d7940ecd6c3123c23c484 Mon Sep 17 00:00:00 2001
+From: emacsway <ivzak@yandex.ru>
+Date: Thu, 17 May 2018 06:46:19 +0300
+Subject: [PATCH 11/11] fixed tox deps
+
+---
+ example/requirements-1.0.txt                        |  5 +++++
+ example/requirements-2.0.txt                        |  5 +++++
+ example/{requirements.txt => requirements-base.txt} |  3 ---
+ tox.ini                                             | 12 +++++++-----
+ 4 files changed, 17 insertions(+), 8 deletions(-)
+ create mode 100644 example/requirements-1.0.txt
+ create mode 100644 example/requirements-2.0.txt
+ rename example/{requirements.txt => requirements-base.txt} (77%)
+
+diff --git a/example/requirements-1.0.txt b/example/requirements-1.0.txt
+new file mode 100644
+index 0000000..8f82970
+--- /dev/null
++++ b/example/requirements-1.0.txt
+@@ -0,0 +1,5 @@
++--requirement=requirements-base.txt
++
++easy_thumbnails==2.4.1
++WebTest==2.0.27
++django-webtest==1.9.2
+diff --git a/example/requirements-2.0.txt b/example/requirements-2.0.txt
+new file mode 100644
+index 0000000..f8d48fb
+--- /dev/null
++++ b/example/requirements-2.0.txt
+@@ -0,0 +1,5 @@
++--requirement=requirements-base.txt
++
++easy-thumbnails==2.5
++WebTest==2.0.29
++django-webtest==1.9.3
+diff --git a/example/requirements.txt b/example/requirements-base.txt
+similarity index 77%
+rename from example/requirements.txt
+rename to example/requirements-base.txt
+index efb3da4..e9b9e7f 100644
+--- a/example/requirements.txt
++++ b/example/requirements-base.txt
+@@ -1,6 +1,3 @@
+-easy_thumbnails==2.4.1
+-WebTest==2.0.27
+-django-webtest==1.9.2
+ coverage==4.4.1
+ 
+ isort==4.2.15
+diff --git a/tox.ini b/tox.ini
+index a29cd2a..02508c3 100644
+--- a/tox.ini
++++ b/tox.ini
+@@ -8,7 +8,12 @@ envlist = django18, django110, django111, django20
+ [base]
+ deps =
+     pillow==4.2.1
+-    -r{toxinidir}/example/requirements.txt
++    -r{toxinidir}/example/requirements-1.0.txt
++
++[base2]
++deps =
++    pillow==4.2.1
++    -r{toxinidir}/example/requirements-2.0.txt
+ 
+ [testenv]
+ commands = py.test example --create-db --cache-clear
+@@ -34,7 +39,4 @@ deps =
+ [testenv:django20]
+ deps =
+     Django==2.0
+-    easy_thumbnails==2.5
+-    WebTest==2.0.29
+-    django-webtest==1.9.3
+-    {[base]deps}
++    {[base2]deps}

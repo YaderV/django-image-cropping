@@ -1,0 +1,281 @@
+From ce10d6a904dc45d6339f0ee734811fb16b9f51f5 Mon Sep 17 00:00:00 2001
+From: Chris Vigelius <me@cv.gd>
+Date: Wed, 8 Aug 2018 23:09:40 +0200
+Subject: [PATCH 1/2] Django 2.1 support (Django 2.0 changes from PR #123, plus
+ Django 2.1 changes)
+
+---
+ .travis.yml                     |  8 ++++++++
+ example/models.py               |  2 +-
+ example/requirements.txt        |  2 +-
+ example/settings.py             | 29 ++++++++++++++++++++---------
+ example/tests/test_settings.py  |  6 +++++-
+ example/urls.py                 |  2 +-
+ example/views.py                |  6 +++++-
+ image_cropping/backends/base.py |  2 +-
+ image_cropping/fields.py        |  4 ++--
+ image_cropping/widgets.py       | 20 ++++++++++++--------
+ tox.ini                         | 12 +++++++++++-
+ 11 files changed, 67 insertions(+), 26 deletions(-)
+
+diff --git a/.travis.yml b/.travis.yml
+index d2c01eb..d98be4f 100644
+--- a/.travis.yml
++++ b/.travis.yml
+@@ -12,6 +12,14 @@ env:
+   - TOXENV=django18
+   - TOXENV=django110
+   - TOXENV=django111
++  - TOXENV=django20
++  - TOXENV=django21
++matrix:
++  exclude:
++    - python: 2.7
++      env: TOXENV=django20
++    - python: 2.7
++      env: TOXENV=django21
+ notifications:
+   email: false
+ sudo: false
+diff --git a/example/models.py b/example/models.py
+index 6446b29..60a6d75 100644
+--- a/example/models.py
++++ b/example/models.py
+@@ -18,7 +18,7 @@ def get_cropping_as_list(self):
+ 
+ 
+ class ImageFK(models.Model):
+-    image = models.ForeignKey(Image)
++    image = models.ForeignKey(Image, on_delete=models.CASCADE)
+     cropping = ImageRatioField('image__image_field', '120x100')
+ 
+     class Meta:
+diff --git a/example/requirements.txt b/example/requirements.txt
+index efb3da4..f7c69f6 100644
+--- a/example/requirements.txt
++++ b/example/requirements.txt
+@@ -1,4 +1,4 @@
+-easy_thumbnails==2.4.1
++easy_thumbnails==2.5.0
+ WebTest==2.0.27
+ django-webtest==1.9.2
+ coverage==4.4.1
+diff --git a/example/settings.py b/example/settings.py
+index 4a1d79d..a09d3e0 100644
+--- a/example/settings.py
++++ b/example/settings.py
+@@ -49,15 +49,26 @@
+ ]
+ 
+ if django.VERSION[:2] >= (1, 7):
+-    MIDDLEWARE_CLASSES = (
+-        'django.contrib.sessions.middleware.SessionMiddleware',
+-        'django.middleware.common.CommonMiddleware',
+-        'django.middleware.csrf.CsrfViewMiddleware',
+-        'django.contrib.auth.middleware.AuthenticationMiddleware',
+-        'django.contrib.auth.middleware.SessionAuthenticationMiddleware',
+-        'django.contrib.messages.middleware.MessageMiddleware',
+-        'django.middleware.clickjacking.XFrameOptionsMiddleware',
+-    )
++    if django.VERSION[:2] >= (1, 10):
++        MIDDLEWARE = (
++            'django.middleware.security.SecurityMiddleware',
++            'django.contrib.sessions.middleware.SessionMiddleware',
++            'django.middleware.common.CommonMiddleware',
++            'django.middleware.csrf.CsrfViewMiddleware',
++            'django.contrib.auth.middleware.AuthenticationMiddleware',
++            'django.contrib.messages.middleware.MessageMiddleware',
++            'django.middleware.clickjacking.XFrameOptionsMiddleware',
++        )
++    else:
++        MIDDLEWARE_CLASSES = (
++            'django.contrib.sessions.middleware.SessionMiddleware',
++            'django.middleware.common.CommonMiddleware',
++            'django.middleware.csrf.CsrfViewMiddleware',
++            'django.contrib.auth.middleware.AuthenticationMiddleware',
++            'django.contrib.auth.middleware.SessionAuthenticationMiddleware',
++            'django.contrib.messages.middleware.MessageMiddleware',
++            'django.middleware.clickjacking.XFrameOptionsMiddleware',
++        )
+ 
+ INSTALLED_APPS = [
+     'django.contrib.auth',
+diff --git a/example/tests/test_settings.py b/example/tests/test_settings.py
+index 074b527..081799d 100644
+--- a/example/tests/test_settings.py
++++ b/example/tests/test_settings.py
+@@ -1,6 +1,10 @@
+ from django_webtest import WebTest
+ 
+-from django.core.urlresolvers import reverse
++try:
++    from django.urls import reverse
++except ImportError:
++    # django 1.8 compat, remove when dropping support
++    from django.core.urlresolvers import reverse
+ from django.test.utils import override_settings
+ 
+ from . import factory
+diff --git a/example/urls.py b/example/urls.py
+index 944f3b4..e1a5588 100644
+--- a/example/urls.py
++++ b/example/urls.py
+@@ -22,7 +22,7 @@
+     url(r'^show_thumbnail/(?P<image_id>\d+)/$',
+         views.show_thumbnail,
+         name='show_thumbnail'),
+-    url(r'^admin/', include(admin.site.urls)),
++    url(r'^admin/', admin.site.urls),
+ ]
+ 
+ urlpatterns += static.static(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT)
+diff --git a/example/views.py b/example/views.py
+index dc16d26..0a2245c 100644
+--- a/example/views.py
++++ b/example/views.py
+@@ -1,4 +1,8 @@
+-from django.core.urlresolvers import reverse
++try:
++    from django.urls import reverse
++except ImportError:
++    # django 1.8 compat, remove when dropping support
++    from django.core.urlresolvers import reverse
+ from django.http import HttpResponseRedirect
+ from django.shortcuts import get_object_or_404, render
+ 
+diff --git a/image_cropping/backends/base.py b/image_cropping/backends/base.py
+index eb4418e..6be467b 100644
+--- a/image_cropping/backends/base.py
++++ b/image_cropping/backends/base.py
+@@ -40,7 +40,7 @@ def get_widget(self, db_field, target, admin_site):
+         if target['fk_field']:
+             # it's a ForeignKey
+             return self.WIDGETS['foreign_key'](
+-                db_field.rel,
++                db_field.remote_field if django.VERSION[:2] >= (2, 0) else db_field.rel,
+                 field_name=target['fk_field'],
+                 admin_site=admin_site,
+             )
+diff --git a/image_cropping/fields.py b/image_cropping/fields.py
+index 741432c..49bd270 100644
+--- a/image_cropping/fields.py
++++ b/image_cropping/fields.py
+@@ -74,8 +74,8 @@ def deconstruct(self):  # pragma: no cover
+         }
+         return self.name, 'image_cropping.fields.ImageRatioField', args, kwargs
+ 
+-    def contribute_to_class(self, cls, name):
+-        super(ImageRatioField, self).contribute_to_class(cls, name)
++    def contribute_to_class(self, cls, name, **kwargs):
++        super(ImageRatioField, self).contribute_to_class(cls, name, **kwargs)
+         if not cls._meta.abstract:
+             # attach a list of fields that are referenced by the ImageRatioField
+             # so we can set the correct widget in the ModelAdmin
+diff --git a/image_cropping/widgets.py b/image_cropping/widgets.py
+index 76eb2a5..4765703 100644
+--- a/image_cropping/widgets.py
++++ b/image_cropping/widgets.py
+@@ -89,23 +89,23 @@ def _media(self):
+ 
+ 
+ class ImageCropWidget(AdminFileWidget, CropWidget):
+-    def render(self, name, value, attrs=None):
++    def render(self, name, value, attrs=None, renderer=None):
+         if not attrs:
+             attrs = {}
+         if value:
+             attrs.update(get_attrs(value, name))
+-        return super(AdminFileWidget, self).render(name, value, attrs)
++        return super(AdminFileWidget, self).render(name, value, attrs, renderer)
+ 
+ 
+ class HiddenImageCropWidget(ImageCropWidget):
+-    def render(self, name, value, attrs=None):
++    def render(self, name, value, attrs=None, renderer=None):
+         if not attrs:
+             attrs = {}
+         # we need to hide it the whole field by JS because the admin
+         # doesn't yet support hidden fields:
+         # https://code.djangoproject.com/ticket/11277
+         attrs['data-hide-field'] = True
+-        return super(HiddenImageCropWidget, self).render(name, value, attrs)
++        return super(HiddenImageCropWidget, self).render(name, value, attrs, renderer)
+ 
+ 
+ class CropForeignKeyWidget(ForeignKeyRawIdWidget, CropWidget):
+@@ -113,13 +113,17 @@ def __init__(self, *args, **kwargs):
+         self.field_name = kwargs.pop('field_name')
+         super(CropForeignKeyWidget, self).__init__(*args, **kwargs)
+ 
+-    def render(self, name, value, attrs=None):
++    def render(self, name, value, attrs=None, renderer=None):
+         if attrs is None:
+             attrs = {}
+ 
+         if value:
+-            app_name = self.rel.to._meta.app_label
+-            model_name = self.rel.to._meta.object_name.lower()
++            if django.VERSION[:2] >= (2, 0):
++                rel_to = self.rel.model
++            else:
++                rel_to = self.rel.to
++            app_name = rel_to._meta.app_label
++            model_name = rel_to._meta.object_name.lower()
+             try:
+                 image = getattr(
+                     get_model(app_name, model_name).objects.get(pk=value),
+@@ -133,4 +137,4 @@ def render(self, name, value, attrs=None):
+             except AttributeError:
+                 logger.error("Object %s.%s doesn't have an attribute named '%s'." % (
+                     app_name, model_name, self.field_name))
+-        return super(CropForeignKeyWidget, self).render(name, value, attrs)
++        return super(CropForeignKeyWidget, self).render(name, value, attrs, renderer)
+diff --git a/tox.ini b/tox.ini
+index 84a9886..5e1d1f1 100644
+--- a/tox.ini
++++ b/tox.ini
+@@ -3,7 +3,7 @@
+ # Then call "tox" from this directory to run the test suite for all configurations.
+ 
+ [tox]
+-envlist = django18, django110, django111
++envlist = django18, django110, django111, django20, django21
+ 
+ [base]
+ deps =
+@@ -30,3 +30,13 @@ deps =
+ deps =
+     Django<2.0
+     {[base]deps}
++
++[testenv:django20]
++deps =
++    Django<2.1
++    {[base]deps}
++
++[testenv:django21]
++deps =
++    Django<2.2
++    {[base]deps}
+\ No newline at end of file
+
+From 18fea483b679c5e76caf3077bc03eb94042c6dd2 Mon Sep 17 00:00:00 2001
+From: Chris Vigelius <me@cv.gd>
+Date: Wed, 8 Aug 2018 23:48:14 +0200
+Subject: [PATCH 2/2] bump to retry travis build
+
+---
+ tox.ini | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/tox.ini b/tox.ini
+index 5e1d1f1..6092d2b 100644
+--- a/tox.ini
++++ b/tox.ini
+@@ -39,4 +39,4 @@ deps =
+ [testenv:django21]
+ deps =
+     Django<2.2
+-    {[base]deps}
+\ No newline at end of file
++    {[base]deps}
